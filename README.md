@@ -35,8 +35,17 @@ python analyze_vibro.py vibro_sens_long.csv \
   --min-gap-sec 10
 ```
 
+Manual time window (seconds from start):
+```bash
+python analyze_vibro.py vibro_sens_long.csv \
+  --segment-mode manual \
+  --segment-start 12.5 \
+  --segment-end 38.0
+```
+
 Key options:
-- `--segment-mode gap|energy` (default: gap)
+- `--segment-mode gap|energy|manual` (default: gap)
+- `--segment-start` / `--segment-end` (manual window in seconds)
 - `--energy-k` (MAD multiplier for energy thresholding)
 - `--min-segment-sec` (minimum flight duration)
 - `--min-gap-sec` (minimum gap between flights)
@@ -52,6 +61,9 @@ Outputs include:
 Example outputs:
 ![Combined spectrogram](media/combined_spectrogram.png)
 ![Segment 1 spectrum](media/segment1_spectrum.png)
+![Combined spectrogram (manual 60-258s)](media/combined_spectrogram_manual_60_258.png)
+![Segment 1 spectrum (manual 60-258s)](media/segment1_spectrum_manual_60_258.png)
+![Segment 1 spectrogram (manual 60-258s)](media/segment1_spectrogram_manual_60_258.png)
 
 ## 2) interactive_spectrogram.py
 Interactive spectrogram viewer. Works in headless mode via Plotly HTML.
@@ -74,6 +86,12 @@ Useful options:
 - `--fmax 300` (limit max frequency shown)
 - `--max-samples 300000` (downsample for speed)
 - `--nperseg 2048 --noverlap 1536` (STFT windowing)
+
+Interactive time-range selection (Matplotlib GUI):
+- Press `s` to set range start at the cursor time.
+- Press `e` to set range end at the cursor time.
+- Press `c` to clear the selection.
+- When both are set, peak frequencies for the selected window are printed.
 
 ### Notes
 - The Matplotlib GUI backend does not work in headless environments. Use

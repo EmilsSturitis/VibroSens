@@ -1,0 +1,21 @@
+File: vibro_sens_long.csv
+Total samples: 2349979
+Median dt: 0.000700s
+Manual segment requested: 60.000s to 258.000s
+Segments: 1
+  Segment 1: 298546 samples, fs ~ 1428.57 Hz
+    Segment 1 aX [g] peak: 78.50 Hz (mag 4.4800e-02)
+    Segment 1 aX [g] peak: 78.00 Hz (mag 4.3682e-02)
+    Segment 1 aX [g] peak: 79.00 Hz (mag 3.9901e-02)
+    Segment 1 aX [g] peak: 77.50 Hz (mag 3.9805e-02)
+    Segment 1 aX [g] peak: 79.50 Hz (mag 3.8935e-02)
+    Segment 1 aY [g] peak: 78.50 Hz (mag 2.8107e-02)
+    Segment 1 aY [g] peak: 79.00 Hz (mag 2.6974e-02)
+    Segment 1 aY [g] peak: 79.50 Hz (mag 2.6675e-02)
+    Segment 1 aY [g] peak: 78.00 Hz (mag 2.5340e-02)
+    Segment 1 aY [g] peak: 80.00 Hz (mag 2.2445e-02)
+    Segment 1 aZ [g] peak: 62.00 Hz (mag 2.1251e-02)
+    Segment 1 aZ [g] peak: 62.50 Hz (mag 1.9404e-02)
+    Segment 1 aZ [g] peak: 61.50 Hz (mag 1.7298e-02)
+    Segment 1 aZ [g] peak: 114.51 Hz (mag 1.4705e-02)
+    Segment 1 aZ [g] peak: 63.00 Hz (mag 1.4648e-02)

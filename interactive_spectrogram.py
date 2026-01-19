@@ -21,6 +21,9 @@ import matplotlib.pyplot as plt
 
 
 MAX_SPECTRO_SAMPLES = 300_000
+MAX_WELCH_SAMPLES = 1_000_000
+TOP_PEAKS = 5
+PEAK_MIN_HZ = 2.0
 
 
 def _parse_datetime(date_str: str, time_str: str) -> datetime:
@@ -86,6 +89,30 @@ def read_vibro_csv(path: str):
     t0 = times[0]
     t = np.array([(dt - t0).total_seconds() for dt in times], dtype=float)
     return t, np.array(ax), np.array(ay), np.array(az)
+
+
+def _welch_spectrum(x: np.ndarray, fs: float):
+    x = signal.detrend(x, type="constant")
+    if len(x) > MAX_WELCH_SAMPLES:
+        step = int(np.ceil(len(x) / MAX_WELCH_SAMPLES))
+        x = x[::step]
+        fs = fs / step
+    nperseg = max(1024, min(16384, int(fs * 2)))
+    freqs, psd = signal.welch(
+        x, fs=fs, window="hann", nperseg=nperseg, detrend="constant"
+    )
+    mag = np.sqrt(psd)
+    return freqs, mag
+
+
+def _top_peaks(freqs: np.ndarray, mag: np.ndarray, k: int):
+    mask = freqs >= PEAK_MIN_HZ
+    freqs = freqs[mask]
+    mag = mag[mask]
+    if len(freqs) == 0:
+        return []
+    idx = np.argsort(mag)[-k:][::-1]
+    return [(float(freqs[i]), float(mag[i])) for i in idx]
 
 
 def main():
@@ -269,6 +296,85 @@ def main():
         color="w",
         bbox=dict(facecolor="black", alpha=0.5, edgecolor="none"),
     )
+    range_readout = axes[0].text(
+        0.01,
+        0.90,
+        "",
+        transform=axes[0].transAxes,
+        va="top",
+        ha="left",
+        color="w",
+        bbox=dict(facecolor="black", alpha=0.5, edgecolor="none"),
+    )
+
+    print("Controls: press 's' to set range start, 'e' to set range end, 'c' to clear.")
+
+    selection = {"start": None, "end": None}
+    range_artists = []
+
+    def _update_range_visuals():
+        for artist in range_artists:
+            artist.remove()
+        range_artists.clear()
+        if selection["start"] is None and selection["end"] is None:
+            range_readout.set_text("")
+            fig.canvas.draw_idle()
+            return
+        start = selection["start"]
+        end = selection["end"]
+        if start is not None:
+            for axp in axes:
+                range_artists.append(axp.axvline(start, color="w", lw=1.0))
+        if end is not None:
+            for axp in axes:
+                range_artists.append(axp.axvline(end, color="w", lw=1.0))
+        if start is not None and end is not None:
+            lo, hi = sorted([start, end])
+            for axp in axes:
+                range_artists.append(
+                    axp.axvspan(lo, hi, color="w", alpha=0.15, lw=0)
+                )
+            range_readout.set_text(f"range={lo:.2f}s..{hi:.2f}s")
+        else:
+            value = start if start is not None else end
+            tag = "start" if start is not None else "end"
+            range_readout.set_text(f"{tag}={value:.2f}s")
+        fig.canvas.draw_idle()
+
+    def _summarize_range():
+        start = selection["start"]
+        end = selection["end"]
+        if start is None or end is None:
+            return
+        lo, hi = sorted([start, end])
+        if hi <= lo:
+            print("Selected range is empty.")
+            return
+        start_idx = int(np.searchsorted(t, lo, side="left"))
+        end_idx = int(np.searchsorted(t, hi, side="right"))
+        if end_idx - start_idx < 4:
+            print("Selected range too short for spectrum.")
+            return
+        seg_t = t[start_idx:end_idx]
+        seg_dt = np.median(np.diff(seg_t))
+        fs_seg = 1.0 / seg_dt if seg_dt > 0 else 0.0
+        if fs_seg <= 0:
+            print("Selected range has invalid sampling rate.")
+            return
+        duration = seg_t[-1] - seg_t[0]
+        print(
+            f"Selected range: {lo:.3f}s..{hi:.3f}s "
+            f"({duration:.3f}s, {len(seg_t)} samples, fs ~ {fs_seg:.2f} Hz)"
+        )
+        for label, data in series:
+            seg = data[start_idx:end_idx]
+            freqs, mag = _welch_spectrum(seg, fs_seg)
+            peaks = _top_peaks(freqs, mag, TOP_PEAKS)
+            if not peaks:
+                print(f"  {label}: no peaks >= {PEAK_MIN_HZ} Hz")
+                continue
+            peak_text = ", ".join([f"{f0:.1f} Hz" for f0, _ in peaks])
+            print(f"  {label} peaks: {peak_text}")
 
     def on_move(event):
         if event.inaxes not in axes:
@@ -280,7 +386,24 @@ def main():
         readout.set_text(f"t={t_val:.2f}s  f={f_val:.2f}Hz")
         fig.canvas.draw_idle()
 
+    def on_key(event):
+        if event.xdata is None:
+            return
+        if event.key == "s":
+            selection["start"] = float(event.xdata)
+            _update_range_visuals()
+        elif event.key == "e":
+            selection["end"] = float(event.xdata)
+            _update_range_visuals()
+        elif event.key == "c":
+            selection["start"] = None
+            selection["end"] = None
+            _update_range_visuals()
+        if selection["start"] is not None and selection["end"] is not None:
+            _summarize_range()
+
     fig.canvas.mpl_connect("motion_notify_event", on_move)
+    fig.canvas.mpl_connect("key_press_event", on_key)
     if args.save:
         fig.savefig(args.save, dpi=200)
         print(f"Saved spectrogram to {args.save}")

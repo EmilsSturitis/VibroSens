@@ -201,6 +201,8 @@ def analyze_file(
     min_segment_sec: float,
     min_gap_sec: float,
     energy_window_sec: float,
+    segment_start: float | None,
+    segment_end: float | None,
 ):
     t, ax, ay, az = read_vibro_csv(path)
     segments = []
@@ -221,6 +223,21 @@ def analyze_file(
             energy_window_sec,
         )
         median_dt = float(np.median(np.diff(t))) if len(t) > 1 else None
+    elif segment_mode == "manual":
+        if segment_start is None or segment_end is None:
+            raise SystemExit(
+                "--segment-start and --segment-end are required for manual mode."
+            )
+        t_min = float(t[0])
+        t_max = float(t[-1])
+        start_sec = max(segment_start, t_min)
+        end_sec = min(segment_end, t_max)
+        if end_sec <= start_sec:
+            raise SystemExit("Manual segment range is empty after clamping to data.")
+        start_idx = int(np.searchsorted(t, start_sec, side="left"))
+        end_idx = int(np.searchsorted(t, end_sec, side="right"))
+        segments = [slice(start_idx, end_idx)]
+        median_dt = float(np.median(np.diff(t))) if len(t) > 1 else None
     else:
         raise ValueError(f"Unknown segment mode: {segment_mode}")
 
@@ -236,6 +253,10 @@ def analyze_file(
         thresh, med, mad = energy_stats
         summary_lines.append(
             f"Energy threshold (median + {energy_k:.2f}*MAD): {thresh:.6f} (med {med:.6f}, MAD {mad:.6f})"
+        )
+    if segment_mode == "manual":
+        summary_lines.append(
+            f"Manual segment requested: {segment_start:.3f}s to {segment_end:.3f}s"
         )
     summary_lines.append(f"Segments: {len(segments)}")
 
@@ -372,9 +393,21 @@ def main():
     )
     parser.add_argument(
         "--segment-mode",
-        choices=["gap", "energy"],
+        choices=["gap", "energy", "manual"],
         default="gap",
-        help="Segmentation method: gap (time gaps) or energy (activity).",
+        help="Segmentation method: gap (time gaps), energy (activity), or manual (time range).",
+    )
+    parser.add_argument(
+        "--segment-start",
+        type=float,
+        default=None,
+        help="Manual segment start time in seconds (requires --segment-mode manual).",
+    )
+    parser.add_argument(
+        "--segment-end",
+        type=float,
+        default=None,
+        help="Manual segment end time in seconds (requires --segment-mode manual).",
     )
     parser.add_argument(
         "--energy-k",
@@ -416,6 +449,8 @@ def main():
         args.min_segment_sec,
         args.min_gap_sec,
         args.energy_window_sec,
+        args.segment_start,
+        args.segment_end,
     )
     print(f"Done. Outputs in {output_dir}/")
 
