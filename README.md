@@ -1,7 +1,6 @@
 # VibroSens Analysis Tools
 
-This folder contains two Python scripts for analyzing vibration data from the
-CSV files in this repo.
+This folder contains two Python scripts for analyzing vibration data from PCE-VDL 24L 3-axis sensor.
 
 ## Requirements
 - Python 3.10+
