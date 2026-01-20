@@ -2,6 +2,7 @@
 import argparse
 import csv
 import os
+from typing import Optional
 from datetime import datetime
 
 import numpy as np
@@ -201,8 +202,8 @@ def analyze_file(
     min_segment_sec: float,
     min_gap_sec: float,
     energy_window_sec: float,
-    segment_start: float | None,
-    segment_end: float | None,
+    segment_start: "Optional[float]",
+    segment_end: "Optional[float]",
 ):
     t, ax, ay, az = read_vibro_csv(path)
     segments = []

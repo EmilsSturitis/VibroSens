@@ -1,6 +1,13 @@
 # VibroSens Analysis Tools
 
-This folder contains two Python scripts for analyzing vibration data from PCE-VDL 24L 3-axis sensor.
+This folder contains four Python scripts for analyzing vibration data from PCE-VDL 24L 3-axis sensor.
+
+## Which script should I use?
+Quick guide:
+- `gui_vibro.py` for interactive file pick + time window + plots + metrics.
+- `analyze_vibro.py` for batch spectra/spectrograms with automatic segmentation.
+- `interactive_spectrogram.py` for interactive spectrograms in HTML.
+- `quantify_vibro.py` to compare vibration metrics across tests.
 
 ## Requirements
 - Python 3.10+
@@ -95,3 +102,51 @@ Interactive time-range selection (Matplotlib GUI):
 ### Notes
 - The Matplotlib GUI backend does not work in headless environments. Use
   `--plotly-out` to create an interactive HTML you can open in a browser.
+
+## 3) quantify_vibro.py
+Quantify vibration metrics to compare test setups.
+
+Compare multiple files (ranked by RMS magnitude by default):
+```bash
+python quantify_vibro.py Test_1.csv Test_2.csv Test_3.csv
+```
+
+Per-file time windows (place --start/--end after each file or folder):
+```bash
+python quantify_vibro.py Test_1.csv --start 10 --end 60 Test_2.csv --start 5 --end 40
+```
+
+Sort by a different metric and save a summary CSV:
+```bash
+python quantify_vibro.py data\ --sort-by p95_mag --out-csv vibration_summary.csv
+```
+
+Available metrics for sorting:
+- `rms_mag` (default)
+- `p95_mag`
+- `peak_mag`
+- `crest_factor`
+- `duration_s`
+- `samples`
+
+## 4) gui_vibro.py
+GUI for selecting a CSV, choosing a time window, and generating spectra, spectrograms, and metrics.
+
+Run:
+```bash
+python gui_vibro.py
+```
+
+Features:
+- File picker + start/end input
+- Preview magnitude vs time with hover readout
+- Axis plots (spectrum + spectrogram) with hover readout
+- Output images + summary metrics file
+
+## Screenshots
+Existing examples:
+- Combined spectrogram: `media/combined_spectrogram.png`
+- Manual window outputs: `media/combined_spectrogram_manual_60_258.png`, `media/segment1_spectrum_manual_60_258.png`, `media/segment1_spectrogram_manual_60_258.png`
+- Interactive stacked axes: `media/interactive_all_axes.png`
+
+If you want a GUI screenshot added here, I can wire it in once you provide the image path.
