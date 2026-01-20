@@ -4,3 +4,6 @@ vibro_sens_short.csv
 analysis_outputs/
 __pycache__/analyze_vibro.cpython-38.pyc
 __pycache__/quantify_vibro.cpython-38.pyc
+*.html
+*.ipynb_checkpoints
+
