@@ -149,4 +149,4 @@ Existing examples:
 - Manual window outputs: `media/combined_spectrogram_manual_60_258.png`, `media/segment1_spectrum_manual_60_258.png`, `media/segment1_spectrogram_manual_60_258.png`
 - Interactive stacked axes: `media/interactive_all_axes.png`
 
-If you want a GUI screenshot added here, I can wire it in once you provide the image path.
+
