@@ -42,6 +42,7 @@ class VibroGui(tk.Tk):
         self.start_var = tk.StringVar()
         self.end_var = tk.StringVar()
         self.output_var = tk.StringVar()
+        self.clip_g_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Select a CSV to begin.")
 
         self._build_ui()
@@ -81,6 +82,10 @@ class VibroGui(tk.Tk):
         )
         tk.Label(win_frame, text="Segment end [s]:").pack(side="left")
         tk.Entry(win_frame, textvariable=self.end_var, width=10).pack(
+            side="left", padx=6
+        )
+        tk.Label(win_frame, text="G clip (abs) [g]:").pack(side="left")
+        tk.Entry(win_frame, textvariable=self.clip_g_var, width=8).pack(
             side="left", padx=6
         )
 
@@ -166,6 +171,11 @@ class VibroGui(tk.Tk):
         except ValueError:
             messagebox.showerror("Invalid window", "Start and end must be numbers.")
             return
+        try:
+            clip_g = self._parse_clip_g()
+        except ValueError as exc:
+            messagebox.showerror("Invalid G clip", str(exc))
+            return
         if end <= start:
             messagebox.showerror("Invalid window", "End must be greater than start.")
             return
@@ -188,9 +198,12 @@ class VibroGui(tk.Tk):
                 analyze_vibro.ENERGY_WINDOW_SEC,
                 start,
                 end,
+                clip_g,
             )
-            metrics = quantify_vibro.quantify_file(path, start, end)
+            metrics = quantify_vibro.quantify_file(path, start, end, clip_g)
             metrics_text = _format_metrics(metrics)
+            if clip_g:
+                metrics_text += f"\nG clip (abs) [g]: {clip_g:.6g}"
             self.metrics_text.delete("1.0", tk.END)
             self.metrics_text.insert(tk.END, metrics_text)
             metrics_path = os.path.join(output_dir, f"{base}_metrics.txt")
@@ -214,11 +227,20 @@ class VibroGui(tk.Tk):
             messagebox.showerror("Error", str(exc))
             return
 
+        try:
+            clip_g = self._parse_clip_g()
+        except ValueError as exc:
+            messagebox.showerror("Invalid G clip", str(exc))
+            return
+        ax, ay, az = self._apply_clip(ax, ay, az, clip_g)
         mag = (ax * ax + ay * ay + az * az) ** 0.5
         self.preview_fig.clear()
         self.preview_ax = self.preview_fig.add_subplot(111)
         self.preview_ax2 = None
-        self.preview_ax.plot(t, mag, lw=0.8, color="tab:blue", label="Mag [g]")
+        label = "Mag [g]"
+        if clip_g:
+            label = f"Mag [g] (clip {clip_g:g})"
+        self.preview_ax.plot(t, mag, lw=0.8, color="tab:blue", label=label)
         self.preview_ax.set_xlabel("Time [s]")
         self.preview_ax.set_ylabel("Magnitude [g]")
         self.preview_ax.set_title(os.path.basename(path))
@@ -274,6 +296,26 @@ class VibroGui(tk.Tk):
             return float(raw)
         except ValueError:
             return 0.0
+
+    def _parse_clip_g(self):
+        raw = self.clip_g_var.get().strip()
+        if not raw:
+            return None
+        try:
+            val = float(raw)
+        except ValueError:
+            raise ValueError("G clip must be a number.")
+        if val < 0:
+            raise ValueError("G clip must be >= 0.")
+        return val
+
+    def _apply_clip(self, ax, ay, az, clip_g):
+        if clip_g is None or clip_g <= 0:
+            return ax, ay, az
+        ax = np.clip(ax, -clip_g, clip_g)
+        ay = np.clip(ay, -clip_g, clip_g)
+        az = np.clip(az, -clip_g, clip_g)
+        return ax, ay, az
 
     def _read_ardupilot_csv(self, path):
         with open(path, "r", newline="") as f:
@@ -441,6 +483,12 @@ class VibroGui(tk.Tk):
             return
 
         try:
+            clip_g = self._parse_clip_g()
+        except ValueError as exc:
+            messagebox.showerror("Invalid G clip", str(exc))
+            return
+
+        try:
             seg = self._window_slice(
                 t, self.start_var.get().strip(), self.end_var.get().strip()
             )
@@ -452,6 +500,7 @@ class VibroGui(tk.Tk):
         ax = ax[seg]
         ay = ay[seg]
         az = az[seg]
+        ax, ay, az = self._apply_clip(ax, ay, az, clip_g)
         if len(t) < 4:
             messagebox.showerror("Error", "Not enough samples in selected window.")
             return

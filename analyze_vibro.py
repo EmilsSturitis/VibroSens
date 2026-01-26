@@ -194,6 +194,15 @@ def _top_peaks(freqs: np.ndarray, mag: np.ndarray, k: int):
     return [(float(freqs[i]), float(mag[i])) for i in idx]
 
 
+def _apply_clip(ax, ay, az, clip_g):
+    if clip_g is None or clip_g <= 0:
+        return ax, ay, az
+    ax = np.clip(ax, -clip_g, clip_g)
+    ay = np.clip(ay, -clip_g, clip_g)
+    az = np.clip(az, -clip_g, clip_g)
+    return ax, ay, az
+
+
 def analyze_file(
     path: str,
     output_dir: str,
@@ -204,8 +213,10 @@ def analyze_file(
     energy_window_sec: float,
     segment_start: "Optional[float]",
     segment_end: "Optional[float]",
+    clip_g: "Optional[float]" = None,
 ):
     t, ax, ay, az = read_vibro_csv(path)
+    ax, ay, az = _apply_clip(ax, ay, az, clip_g)
     segments = []
     median_dt = None
     gap_threshold = None
@@ -246,6 +257,8 @@ def analyze_file(
     summary_lines = []
     summary_lines.append(f"File: {path}")
     summary_lines.append(f"Total samples: {len(t)}")
+    if clip_g is not None and clip_g > 0:
+        summary_lines.append(f"G clip (abs): {clip_g:.6g} g")
     if median_dt is not None:
         summary_lines.append(f"Median dt: {median_dt:.6f}s")
     if gap_threshold is not None:
@@ -434,6 +447,12 @@ def main():
         default=ENERGY_WINDOW_SEC,
         help="Window size for RMS energy smoothing (seconds).",
     )
+    parser.add_argument(
+        "--clip-g",
+        type=float,
+        default=None,
+        help="Cap acceleration values to +/- this threshold in g.",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.input):
@@ -452,6 +471,7 @@ def main():
         args.energy_window_sec,
         args.segment_start,
         args.segment_end,
+        args.clip_g,
     )
     print(f"Done. Outputs in {output_dir}/")
 

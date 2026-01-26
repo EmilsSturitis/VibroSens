@@ -5,6 +5,7 @@ This folder contains four Python scripts for analyzing vibration data from PCE-V
 ## Which script should I use?
 Quick guide:
 - `gui_vibro.py` for interactive file pick + time window + plots + metrics.
+- `gui_vibro_log.py` for GUI analysis plus ArduPilot log overlay + G clip.
 - `analyze_vibro.py` for batch spectra/spectrograms with automatic segmentation.
 - `interactive_spectrogram.py` for interactive spectrograms in HTML.
 - `quantify_vibro.py` to compare vibration metrics across tests.
@@ -56,6 +57,7 @@ Key options:
 - `--min-segment-sec` (minimum flight duration)
 - `--min-gap-sec` (minimum gap between flights)
 - `--energy-window-sec` (RMS smoothing window)
+- `--clip-g` (cap acceleration values to +/- this threshold in g)
 - `--output-dir` (custom output folder)
 
 Outputs include:
@@ -121,6 +123,11 @@ Sort by a different metric and save a summary CSV:
 python quantify_vibro.py data\ --sort-by p95_mag --out-csv vibration_summary.csv
 ```
 
+Cap acceleration values before metrics:
+```bash
+python quantify_vibro.py Test_1.csv Test_2.csv --clip-g 0.2
+```
+
 Available metrics for sorting:
 - `rms_mag` (default)
 - `p95_mag`
@@ -142,6 +149,18 @@ Features:
 - Preview magnitude vs time with hover readout
 - Axis plots (spectrum + spectrogram) with hover readout
 - Output images + summary metrics file
+
+## 5) gui_vibro_log.py
+GUI for vibro analysis with an optional ArduPilot log overlay and G clipping.
+
+Run:
+```bash
+python gui_vibro_log.py
+```
+
+Extra features:
+- Optional ArduPilot CSV overlay (PWM/RPM on secondary axis) with time offset.
+- G clip (abs) [g] to cap values above a threshold for plots and metrics.
 
 ## Screenshots
 Existing examples:

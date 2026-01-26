@@ -109,13 +109,23 @@ def _rms(x: np.ndarray) -> float:
     return float(np.sqrt(np.mean(x * x)))
 
 
-def quantify_file(path, start, end):
+def _apply_clip(ax, ay, az, clip_g):
+    if clip_g is None or clip_g <= 0:
+        return ax, ay, az
+    ax = np.clip(ax, -clip_g, clip_g)
+    ay = np.clip(ay, -clip_g, clip_g)
+    az = np.clip(az, -clip_g, clip_g)
+    return ax, ay, az
+
+
+def quantify_file(path, start, end, clip_g=None):
     t, ax, ay, az = read_vibro_csv(path)
     seg = _window_slice(t, start, end)
     t = t[seg]
     ax = ax[seg]
     ay = ay[seg]
     az = az[seg]
+    ax, ay, az = _apply_clip(ax, ay, az, clip_g)
     mag = np.sqrt(ax * ax + ay * ay + az * az)
 
     rms_mag = _rms(mag)
@@ -187,6 +197,7 @@ def _parse_args(argv):
     entries = []
     sort_by = "rms_mag"
     out_csv = None
+    clip_g = None
     i = 0
     while i < len(argv):
         tok = argv[i]
@@ -200,6 +211,12 @@ def _parse_args(argv):
             if i + 1 >= len(argv):
                 raise SystemExit("--out-csv requires a value.")
             out_csv = argv[i + 1]
+            i += 2
+            continue
+        if tok == "--clip-g":
+            if i + 1 >= len(argv):
+                raise SystemExit("--clip-g requires a value.")
+            clip_g = float(argv[i + 1])
             i += 2
             continue
         if tok in ("--start", "--end"):
@@ -220,11 +237,11 @@ def _parse_args(argv):
         i += 1
     if not entries:
         raise SystemExit("No input CSV files found.")
-    return entries, sort_by, out_csv
+    return entries, sort_by, out_csv, clip_g
 
 
 def main():
-    entries, sort_by, out_csv = _parse_args(sys.argv[1:])
+    entries, sort_by, out_csv, clip_g = _parse_args(sys.argv[1:])
 
     allowed_sort = {
         "rms_mag",
@@ -247,7 +264,7 @@ def main():
         if not os.path.exists(path):
             print(f"Skipping missing file: {path}")
             continue
-        rows.append(quantify_file(path, entry["start"], entry["end"]))
+        rows.append(quantify_file(path, entry["start"], entry["end"], clip_g))
 
     if not rows:
         raise SystemExit("No valid CSV files to process.")
