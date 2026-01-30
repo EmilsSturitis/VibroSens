@@ -159,8 +159,15 @@ python gui_vibro_log.py
 ```
 
 Extra features:
-- Optional ArduPilot CSV overlay (PWM/RPM on secondary axis) with time offset.
+- Optional ArduPilot CSV/BIN overlay (PWM/RPM on secondary axis) with time offset.
+- Offset controls: entry + coarse/fine +/- buttons (clamped to +/- 360s).
+- Separate PWM/RPM plot window.
+- Overlay auto-starts at the first PWM change away from ~1100 (idle) to make alignment easier.
+- Warning message when log time does not overlap vibro time (adjust offset).
 - G clip (abs) [g] to cap values above a threshold for plots and metrics.
+
+ArduPilot .bin support:
+- Requires `pymavlink` (`python -m pip install pymavlink`).
 
 ## Screenshots
 Existing examples:

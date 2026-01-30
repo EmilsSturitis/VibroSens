@@ -49,6 +49,8 @@ class VibroGui(tk.Tk):
         self._preview_cid = None
         self._preview_data = None
         self._max_freq_hz = 250.0
+        self._preview_after_id = None
+        self._log_cache = {"path": None, "mtime": None, "data": None}
 
     def _build_ui(self):
         pad = {"padx": 8, "pady": 6}
@@ -76,20 +78,31 @@ class VibroGui(tk.Tk):
         tk.Entry(log_frame, textvariable=self.log_offset_var, width=8).pack(
             side="left", padx=4
         )
-        self.log_offset_scale = tk.Scale(
-            log_frame,
-            from_=-360.0,
-            to=360.0,
-            resolution=0.1,
-            orient="horizontal",
-            length=180,
-            showvalue=False,
-            command=self._on_offset_scale,
-        )
-        self.log_offset_scale.pack(side="left", padx=4)
         self._offset_trace_id = self.log_offset_var.trace_add(
             "write", self._on_offset_entry
         )
+        self._offset_coarse = 1.0
+        self._offset_fine = 0.1
+        tk.Button(
+            log_frame,
+            text="- coarse",
+            command=lambda: self._adjust_log_offset(-self._offset_coarse),
+        ).pack(side="left", padx=2)
+        tk.Button(
+            log_frame,
+            text="- fine",
+            command=lambda: self._adjust_log_offset(-self._offset_fine),
+        ).pack(side="left", padx=2)
+        tk.Button(
+            log_frame,
+            text="+ fine",
+            command=lambda: self._adjust_log_offset(self._offset_fine),
+        ).pack(side="left", padx=2)
+        tk.Button(
+            log_frame,
+            text="+ coarse",
+            command=lambda: self._adjust_log_offset(self._offset_coarse),
+        ).pack(side="left", padx=2)
 
         win_frame = tk.Frame(self)
         win_frame.pack(fill="x", **pad)
@@ -293,6 +306,7 @@ class VibroGui(tk.Tk):
                 self.preview_ax.set_title(
                     f"{os.path.basename(path)} (log offset {offset:+.3f}s)"
                 )
+        self._update_overlap_warning()
         self._preview_data = (t, mag)
         if self._preview_cid is None:
             self._preview_cid = self.preview_canvas.mpl_connect(
@@ -334,20 +348,65 @@ class VibroGui(tk.Tk):
         except ValueError:
             return 0.0
 
-    def _on_offset_scale(self, val):
-        try:
-            offset = float(val)
-        except ValueError:
-            return
-        self.log_offset_var.set(f"{offset:.3f}")
-        self._preview_plot()
-
     def _on_offset_entry(self, *_args):
+        self._schedule_preview_plot()
+
+    def _adjust_log_offset(self, delta):
         try:
-            offset = float(self.log_offset_var.get().strip())
+            current = float(self.log_offset_var.get().strip())
         except ValueError:
+            current = 0.0
+        new_val = current + delta
+        new_val = max(-360.0, min(360.0, new_val))
+        self.log_offset_var.set(f"{new_val:.3f}")
+
+    def _schedule_preview_plot(self, delay_ms=120):
+        if self._preview_after_id is not None:
+            try:
+                self.after_cancel(self._preview_after_id)
+            except Exception:
+                pass
+        self._preview_after_id = self.after(delay_ms, self._preview_plot)
+
+    def _get_cached_log(self, log_path):
+        try:
+            mtime = os.path.getmtime(log_path)
+        except OSError:
+            mtime = None
+        cache = self._log_cache
+        if cache["path"] == log_path and cache["mtime"] == mtime and cache["data"]:
+            return cache["data"]
+        data = self._read_ardupilot_log(log_path)
+        self._log_cache = {"path": log_path, "mtime": mtime, "data": data}
+        return data
+
+    def _update_overlap_warning(self):
+        log_path = self.log_file_var.get().strip()
+        if not log_path:
+            self.preview_readout.config(text="")
             return
-        self.log_offset_scale.set(offset)
+        path = self.file_var.get().strip()
+        if not path or not os.path.exists(path):
+            return
+        try:
+            t, _, _, _ = quantify_vibro.read_vibro_csv(path)
+        except Exception:
+            return
+        try:
+            log_t, _ = self._get_cached_log(log_path)
+        except Exception:
+            return
+        offset = self._parse_log_offset()
+        log_t = log_t + offset
+        if not len(t) or not len(log_t):
+            return
+        t_min = float(t[0])
+        t_max = float(t[-1])
+        mask = (log_t >= t_min) & (log_t <= t_max)
+        if not mask.any():
+            self.preview_readout.config(
+                text="Warning: log does not overlap vibro window (adjust offset)."
+            )
 
     def _parse_clip_g(self):
         raw = self.clip_g_var.get().strip()
@@ -392,10 +451,13 @@ class VibroGui(tk.Tk):
 
             pwm_cols = []
             rpm_cols = []
+            volt_cols = []
             for name in headers:
                 lower = name.lower()
                 if "rpm" in lower:
                     rpm_cols.append(name)
+                elif "volt" in lower or "vbat" in lower or "battery" in lower:
+                    volt_cols.append(name)
                 elif (
                     "pwm" in lower
                     or "rcou" in lower
@@ -404,9 +466,9 @@ class VibroGui(tk.Tk):
                 ):
                     pwm_cols.append(name)
 
-            cols = rpm_cols + pwm_cols
+            cols = rpm_cols + volt_cols + pwm_cols
             if not cols:
-                raise ValueError("No PWM/RPM columns found in ArduPilot CSV.")
+                raise ValueError("No PWM/RPM/Voltage columns found in ArduPilot CSV.")
 
             time_vals = []
             series = {name: [] for name in cols}
@@ -469,7 +531,18 @@ class VibroGui(tk.Tk):
             "timeusec",
         }
         pwm_msg_types = {"RCOU", "SERVO_OUTPUT_RAW", "RCIN"}
-        rpm_msg_types = {"RPM", "ESC", "ESC2", "ESC3", "ESC4", "ESC5", "ESC6", "ESC7", "ESC8"}
+        rpm_msg_types = {
+            "RPM",
+            "ESC",
+            "ESC2",
+            "ESC3",
+            "ESC4",
+            "ESC5",
+            "ESC6",
+            "ESC7",
+            "ESC8",
+        }
+        volt_msg_types = {"BAT", "BAT2", "BAT3", "BAT4", "BATT", "POWER"}
 
         def _to_float(val):
             try:
@@ -535,6 +608,16 @@ class VibroGui(tk.Tk):
                 return True
             return False
 
+        def _is_voltage_field(msg_type, field):
+            lower = field.lower()
+            if lower in time_fields or lower == "index":
+                return False
+            if "volt" in lower or "vbat" in lower or "vbatt" in lower:
+                return True
+            if msg_type in volt_msg_types and ("volt" in lower or lower in ("v", "vcc")):
+                return True
+            return False
+
         while True:
             msg = mlog.recv_match(blocking=False)
             if msg is None:
@@ -553,6 +636,8 @@ class VibroGui(tk.Tk):
                 if fval is None:
                     continue
                 if _is_rpm_field(msg_type, key):
+                    fields[f"{msg_type}.{key}"] = fval
+                elif _is_voltage_field(msg_type, key):
                     fields[f"{msg_type}.{key}"] = fval
                 elif _is_pwm_field(msg_type, key):
                     fields[f"{msg_type}.{key}"] = fval
@@ -581,6 +666,91 @@ class VibroGui(tk.Tk):
             return self._read_ardupilot_bin(path)
         return self._read_ardupilot_csv(path)
 
+    def _is_voltage_name(self, name):
+        lower = name.lower()
+        return (
+            "volt" in lower
+            or "vbat" in lower
+            or "vbatt" in lower
+            or "bat[" in lower
+            or lower.endswith(".v")
+            or lower == "v"
+            or "vcc" in lower
+        )
+
+    def _is_rpm_name(self, name):
+        return "rpm" in name.lower()
+
+    def _select_throttle_series(self, series):
+        prefer = ["RCOU.C3", "RCOU.C4", "RCOU.C2", "RCOU.C1"]
+        for name in prefer:
+            if name in series:
+                return name, series[name]
+        for name in series:
+            lower = name.lower()
+            if "thr" in lower or "throttle" in lower:
+                return name, series[name]
+        pwm_candidates = [
+            (name, values)
+            for name, values in series.items()
+            if not self._is_rpm_name(name) and not self._is_voltage_name(name)
+        ]
+        if pwm_candidates:
+            stacked = np.vstack([vals for _, vals in pwm_candidates])
+            thr = np.nanmax(stacked, axis=0)
+            return "PWM.max", thr
+        return None, None
+
+    def _select_voltage_series(self, series):
+        prefer = [
+            "BAT[0].Volt",
+            "BAT.Volt",
+            "BAT.VoltR",
+            "BAT.Volt1",
+            "BAT2.Volt",
+            "BAT2.VoltR",
+            "BATT.Volt",
+        ]
+        for name in prefer:
+            if name in series:
+                return name, series[name]
+        for name in series:
+            lower = name.lower()
+            if "volt" in lower or "vbat" in lower or "battery" in lower:
+                return name, series[name]
+        return None, None
+
+    def _estimate_bpf(self, log_t, series):
+        thr_name, thr = self._select_throttle_series(series)
+        volt_name, volt = self._select_voltage_series(series)
+        if thr is None:
+            raise ValueError(
+                "No throttle PWM series found (expected RCOU.C3 or servo outputs)."
+            )
+        if volt is None:
+            raise ValueError("No battery voltage series found (BAT.* Volt).")
+
+        min_len = min(len(log_t), len(thr), len(volt))
+        if min_len == 0:
+            raise ValueError("No samples available for BPF estimate.")
+        log_t = log_t[:min_len]
+        thr = thr[:min_len]
+        volt = volt[:min_len]
+        if not np.isfinite(thr).any():
+            raise ValueError("Throttle series has no finite samples.")
+        if not np.isfinite(volt).any():
+            raise ValueError("Voltage series has no finite samples.")
+
+        kv = 100.0
+        blades = 2.0
+        pwm_min = 1100.0
+        pwm_max = 1900.0
+        throttle = (thr - pwm_min) / (pwm_max - pwm_min)
+        throttle = np.clip(throttle, 0.0, 1.0)
+        rpm = kv * volt * throttle
+        bpf_hz = rpm * blades / 60.0
+        return log_t, bpf_hz, thr_name, volt_name, thr
+
     def _overlay_log(self, ax_main, t_main):
         log_path = self.log_file_var.get().strip()
         if not log_path:
@@ -589,7 +759,7 @@ class VibroGui(tk.Tk):
             messagebox.showerror("Missing log", f"Log file not found:\n{log_path}")
             return
         try:
-            log_t, series = self._read_ardupilot_log(log_path)
+            log_t, series = self._get_cached_log(log_path)
         except Exception as exc:
             messagebox.showerror("Log error", str(exc))
             return
@@ -616,6 +786,17 @@ class VibroGui(tk.Tk):
             ordered = [(name, series[name]) for name in prefer if name in series]
         else:
             ordered = list(series.items())
+
+        if ordered:
+            min_len = min([len(log_t)] + [len(vals) for _, vals in ordered])
+            if min_len == 0:
+                return
+            if min_len != len(log_t):
+                log_t = log_t[:min_len]
+            for name in list(series.keys()):
+                if len(series[name]) != min_len:
+                    series[name] = series[name][:min_len]
+            ordered = [(name, series[name]) for name, _ in ordered]
 
         active_baseline = 1100.0
         active_tol = 5.0
@@ -852,7 +1033,7 @@ class VibroGui(tk.Tk):
             messagebox.showerror("Missing log", f"Log file not found:\n{log_path}")
             return
         try:
-            log_t, series = self._read_ardupilot_log(log_path)
+            log_t, series = self._get_cached_log(log_path)
         except Exception as exc:
             messagebox.showerror("Log error", str(exc))
             return
