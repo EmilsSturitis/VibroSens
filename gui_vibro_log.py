@@ -9,7 +9,7 @@ import analyze_vibro
 import quantify_vibro
 import numpy as np
 from scipy import signal
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 
 
@@ -48,6 +48,7 @@ class VibroGui(tk.Tk):
         self._build_ui()
         self._preview_cid = None
         self._preview_data = None
+        self._max_freq_hz = 250.0
 
     def _build_ui(self):
         pad = {"padx": 8, "pady": 6}
@@ -122,6 +123,11 @@ class VibroGui(tk.Tk):
         self.preview_ax2 = None
         self.preview_canvas = FigureCanvasTkAgg(self.preview_fig, master=plot_frame)
         self.preview_canvas.get_tk_widget().pack(fill="both", expand=True)
+        self.preview_toolbar = NavigationToolbar2Tk(
+            self.preview_canvas, plot_frame, pack_toolbar=False
+        )
+        self.preview_toolbar.update()
+        self.preview_toolbar.pack(fill="x")
         self.preview_readout = tk.Label(plot_frame, text="")
         self.preview_readout.pack(anchor="w")
 
@@ -467,6 +473,10 @@ class VibroGui(tk.Tk):
             x, fs=fs, window="hann", nperseg=nperseg, detrend="constant"
         )
         mag = np.sqrt(psd)
+        if self._max_freq_hz:
+            mask = freqs <= self._max_freq_hz
+            freqs = freqs[mask]
+            mag = mag[mask]
         return freqs, mag
 
     def _preview_axis_plots(self):
@@ -526,6 +536,8 @@ class VibroGui(tk.Tk):
             ax_spec.plot(freqs, mag_db, lw=1)
             ax_spec.set_ylabel(f"{label}\nMag [dB]")
             ax_spec.grid(True, alpha=0.3)
+            if self._max_freq_hz:
+                ax_spec.set_xlim(0, self._max_freq_hz)
             ax_data[ax_spec] = {
                 "kind": "spectrum",
                 "x": freqs,
@@ -556,6 +568,8 @@ class VibroGui(tk.Tk):
             pcm = ax_sg.pcolormesh(tt, f, sxx_db, shading="gouraud")
             ax_sg.set_ylabel(f"{label}\nFreq [Hz]")
             ax_sg.grid(False)
+            if self._max_freq_hz:
+                ax_sg.set_ylim(0, self._max_freq_hz)
             fig.colorbar(pcm, ax=ax_sg, pad=0.01, label="Mag [dB]")
             ax_data[ax_sg] = {
                 "kind": "spectrogram",
@@ -572,6 +586,9 @@ class VibroGui(tk.Tk):
 
         canvas = FigureCanvasTkAgg(fig, master=win)
         canvas.get_tk_widget().pack(fill="both", expand=True)
+        toolbar = NavigationToolbar2Tk(canvas, win, pack_toolbar=False)
+        toolbar.update()
+        toolbar.pack(fill="x")
         canvas.mpl_connect(
             "motion_notify_event",
             lambda event: self._on_axis_hover(event, ax_data, readout),
