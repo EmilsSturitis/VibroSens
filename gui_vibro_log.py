@@ -63,7 +63,9 @@ class VibroGui(tk.Tk):
 
         log_frame = tk.Frame(self)
         log_frame.pack(fill="x", **pad)
-        tk.Label(log_frame, text="ArduPilot log (CSV, optional):").pack(side="left")
+        tk.Label(log_frame, text="ArduPilot log (CSV/BIN, optional):").pack(
+            side="left"
+        )
         tk.Entry(log_frame, textvariable=self.log_file_var, width=50).pack(
             side="left", padx=6, fill="x", expand=True
         )
@@ -73,6 +75,20 @@ class VibroGui(tk.Tk):
         tk.Label(log_frame, text="Offset [s]:").pack(side="left", padx=(8, 0))
         tk.Entry(log_frame, textvariable=self.log_offset_var, width=8).pack(
             side="left", padx=4
+        )
+        self.log_offset_scale = tk.Scale(
+            log_frame,
+            from_=-360.0,
+            to=360.0,
+            resolution=0.1,
+            orient="horizontal",
+            length=180,
+            showvalue=False,
+            command=self._on_offset_scale,
+        )
+        self.log_offset_scale.pack(side="left", padx=4)
+        self._offset_trace_id = self.log_offset_var.trace_add(
+            "write", self._on_offset_entry
         )
 
         win_frame = tk.Frame(self)
@@ -105,6 +121,9 @@ class VibroGui(tk.Tk):
             side="left", padx=6
         )
         tk.Button(run_frame, text="Axis plots", command=self._preview_axis_plots).pack(
+            side="left", padx=6
+        )
+        tk.Button(run_frame, text="PWM plot", command=self._preview_pwm_plot).pack(
             side="left", padx=6
         )
         tk.Label(run_frame, textvariable=self.status_var).pack(side="left", padx=10)
@@ -147,8 +166,13 @@ class VibroGui(tk.Tk):
 
     def _pick_log_file(self):
         path = filedialog.askopenfilename(
-            title="Select ArduPilot CSV",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            title="Select ArduPilot log",
+            filetypes=[
+                ("ArduPilot logs", "*.csv;*.bin"),
+                ("CSV files", "*.csv"),
+                ("BIN files", "*.bin"),
+                ("All files", "*.*"),
+            ],
         )
         if path:
             self.log_file_var.set(path)
@@ -262,6 +286,13 @@ class VibroGui(tk.Tk):
         except ValueError:
             pass
         self._overlay_log(self.preview_ax, t)
+        log_path = self.log_file_var.get().strip()
+        if log_path:
+            offset = self._parse_log_offset()
+            if offset:
+                self.preview_ax.set_title(
+                    f"{os.path.basename(path)} (log offset {offset:+.3f}s)"
+                )
         self._preview_data = (t, mag)
         if self._preview_cid is None:
             self._preview_cid = self.preview_canvas.mpl_connect(
@@ -302,6 +333,21 @@ class VibroGui(tk.Tk):
             return float(raw)
         except ValueError:
             return 0.0
+
+    def _on_offset_scale(self, val):
+        try:
+            offset = float(val)
+        except ValueError:
+            return
+        self.log_offset_var.set(f"{offset:.3f}")
+        self._preview_plot()
+
+    def _on_offset_entry(self, *_args):
+        try:
+            offset = float(self.log_offset_var.get().strip())
+        except ValueError:
+            return
+        self.log_offset_scale.set(offset)
 
     def _parse_clip_g(self):
         raw = self.clip_g_var.get().strip()
@@ -398,6 +444,143 @@ class VibroGui(tk.Tk):
         series_np = {name: np.array(vals, dtype=float) for name, vals in series.items()}
         return time_vals, series_np
 
+    def _read_ardupilot_bin(self, path):
+        try:
+            from pymavlink import mavutil
+        except Exception as exc:
+            raise ValueError(
+                "pymavlink is required to read .bin logs. "
+                "Install with: pip install pymavlink"
+            ) from exc
+
+        mlog = mavutil.mavlink_connection(path)
+        time_vals = []
+        series = {}
+        time_fields = {
+            "timeus",
+            "time_us",
+            "time_usec",
+            "timems",
+            "time_ms",
+            "time_msec",
+            "times",
+            "time_s",
+            "time",
+            "timeusec",
+        }
+        pwm_msg_types = {"RCOU", "SERVO_OUTPUT_RAW", "RCIN"}
+        rpm_msg_types = {"RPM", "ESC", "ESC2", "ESC3", "ESC4", "ESC5", "ESC6", "ESC7", "ESC8"}
+
+        def _to_float(val):
+            try:
+                return float(val)
+            except Exception:
+                return None
+
+        def _extract_time(d, msg):
+            candidates = [
+                ("TimeUS", 1e-6),
+                ("time_us", 1e-6),
+                ("time_usec", 1e-6),
+                ("TimeMS", 1e-3),
+                ("time_ms", 1e-3),
+                ("time_msec", 1e-3),
+                ("TimeS", 1.0),
+                ("time_s", 1.0),
+                ("Time", 1.0),
+                ("time", 1.0),
+            ]
+            for key, scale in candidates:
+                if key in d:
+                    val = _to_float(d.get(key))
+                    if val is None:
+                        continue
+                    if key.lower() in ("time", "times") and val > 1e6:
+                        return val * 1e-6
+                    if key.lower() in ("time", "times") and val > 1e3:
+                        return val * 1e-3
+                    return val * scale
+            ts = getattr(msg, "_timestamp", None)
+            val = _to_float(ts)
+            if val is None:
+                return None
+            return val
+
+        def _is_pwm_field(msg_type, field):
+            lower = field.lower()
+            if lower in time_fields or lower == "index":
+                return False
+            if "pwm" in lower:
+                return True
+            if msg_type in pwm_msg_types:
+                if "servo" in lower:
+                    return True
+                if re.fullmatch(r"c\d+", lower):
+                    return True
+                if re.fullmatch(r"chan\d+_raw", lower):
+                    return True
+                if re.fullmatch(r"servo\d+_raw", lower):
+                    return True
+                if re.fullmatch(r"servo\d+", lower):
+                    return True
+            return False
+
+        def _is_rpm_field(msg_type, field):
+            lower = field.lower()
+            if lower in time_fields or lower == "index":
+                return False
+            if "rpm" in lower:
+                return True
+            if msg_type in rpm_msg_types and "rpm" in lower:
+                return True
+            return False
+
+        while True:
+            msg = mlog.recv_match(blocking=False)
+            if msg is None:
+                break
+            d = msg.to_dict()
+            msg_type = d.get("mavpackettype", msg.get_type())
+            t_val = _extract_time(d, msg)
+            if t_val is None:
+                continue
+
+            fields = {}
+            for key, val in d.items():
+                if key == "mavpackettype":
+                    continue
+                fval = _to_float(val)
+                if fval is None:
+                    continue
+                if _is_rpm_field(msg_type, key):
+                    fields[f"{msg_type}.{key}"] = fval
+                elif _is_pwm_field(msg_type, key):
+                    fields[f"{msg_type}.{key}"] = fval
+
+            if not fields:
+                continue
+
+            for name in fields:
+                if name not in series:
+                    series[name] = [float("nan")] * len(time_vals)
+            for name, vals in series.items():
+                vals.append(fields.get(name, float("nan")))
+            time_vals.append(t_val)
+
+        if not time_vals:
+            raise ValueError("No time samples parsed from ArduPilot BIN.")
+
+        time_vals = np.array(time_vals, dtype=float)
+        time_vals = time_vals - time_vals[0]
+        series_np = {name: np.array(vals, dtype=float) for name, vals in series.items()}
+        return time_vals, series_np
+
+    def _read_ardupilot_log(self, path):
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".bin":
+            return self._read_ardupilot_bin(path)
+        return self._read_ardupilot_csv(path)
+
     def _overlay_log(self, ax_main, t_main):
         log_path = self.log_file_var.get().strip()
         if not log_path:
@@ -406,7 +589,7 @@ class VibroGui(tk.Tk):
             messagebox.showerror("Missing log", f"Log file not found:\n{log_path}")
             return
         try:
-            log_t, series = self._read_ardupilot_csv(log_path)
+            log_t, series = self._read_ardupilot_log(log_path)
         except Exception as exc:
             messagebox.showerror("Log error", str(exc))
             return
@@ -428,7 +611,33 @@ class VibroGui(tk.Tk):
         t_min = float(t_main[0]) if len(t_main) else 0.0
         t_max = float(t_main[-1]) if len(t_main) else 0.0
         mask = (log_t >= t_min) & (log_t <= t_max)
-        for idx, (name, values) in enumerate(series.items()):
+        prefer = ["RCOU.C1", "RCOU.C2", "RCOU.C3", "RCOU.C4"]
+        if any(name in series for name in prefer):
+            ordered = [(name, series[name]) for name in prefer if name in series]
+        else:
+            ordered = list(series.items())
+
+        active_baseline = 1100.0
+        active_tol = 5.0
+        if ordered:
+            stacked = np.vstack([vals for _, vals in ordered])
+            finite_any = np.isfinite(stacked).any(axis=0)
+            active = np.any(np.abs(stacked - active_baseline) > active_tol, axis=0)
+            active = active & finite_any
+            if active.any():
+                start_idx = int(np.argmax(active))
+                log_t = log_t[start_idx:]
+                for name in list(series.keys()):
+                    series[name] = series[name][start_idx:]
+                ordered = [(name, series[name]) for name, _ in ordered]
+                mask = (log_t >= t_min) & (log_t <= t_max)
+
+        if not mask.any() and len(log_t):
+            x_min = min(t_min, float(log_t[0]))
+            x_max = max(t_max, float(log_t[-1]))
+            ax_main.set_xlim(x_min, x_max)
+
+        for idx, (name, values) in enumerate(ordered):
             if idx >= len(colors):
                 break
             if mask.any():
@@ -436,6 +645,11 @@ class VibroGui(tk.Tk):
                 log_plot_t = log_t[mask]
             else:
                 log_plot_t = log_t
+            finite = np.isfinite(values)
+            if not finite.any():
+                continue
+            values = values[finite]
+            log_plot_t = log_plot_t[finite]
             label = name
             if "rpm" in name.lower():
                 values = values / 60.0
@@ -628,6 +842,109 @@ class VibroGui(tk.Tk):
                 )
             )
             return
+
+    def _preview_pwm_plot(self):
+        log_path = self.log_file_var.get().strip()
+        if not log_path:
+            messagebox.showerror("Missing log", "Please choose an ArduPilot log file.")
+            return
+        if not os.path.exists(log_path):
+            messagebox.showerror("Missing log", f"Log file not found:\n{log_path}")
+            return
+        try:
+            log_t, series = self._read_ardupilot_log(log_path)
+        except Exception as exc:
+            messagebox.showerror("Log error", str(exc))
+            return
+
+        offset = self._parse_log_offset()
+        log_t = log_t + offset
+
+        win = tk.Toplevel(self)
+        win.title("PWM / RPM vs time")
+        fig = Figure(figsize=(9, 4.5), dpi=100)
+        ax = fig.add_subplot(111)
+        colors = [
+            "tab:blue",
+            "tab:orange",
+            "tab:green",
+            "tab:red",
+            "tab:purple",
+            "tab:brown",
+            "tab:pink",
+            "tab:gray",
+        ]
+        labels = []
+        has_rpm = False
+        prefer = ["RCOU.C1", "RCOU.C2", "RCOU.C3", "RCOU.C4"]
+        if any(name in series for name in prefer):
+            ordered = [(name, series[name]) for name in prefer if name in series]
+        else:
+            ordered = list(series.items())
+
+        active_baseline = 1100.0
+        active_tol = 5.0
+        if ordered:
+            stacked = np.vstack([vals for _, vals in ordered])
+            finite_any = np.isfinite(stacked).any(axis=0)
+            active = np.any(np.abs(stacked - active_baseline) > active_tol, axis=0)
+            active = active & finite_any
+            if active.any():
+                start_idx = int(np.argmax(active))
+                log_t = log_t[start_idx:]
+                for name in list(series.keys()):
+                    series[name] = series[name][start_idx:]
+                ordered = [(name, series[name]) for name, _ in ordered]
+
+        t_min = None
+        t_max = None
+        path = self.file_var.get().strip()
+        if path and os.path.exists(path):
+            try:
+                t, _, _, _ = quantify_vibro.read_vibro_csv(path)
+                t_min = float(t[0]) if len(t) else None
+                t_max = float(t[-1]) if len(t) else None
+            except Exception:
+                t_min = None
+                t_max = None
+        if t_min is not None and t_max is not None:
+            mask = (log_t >= t_min) & (log_t <= t_max)
+        else:
+            mask = None
+        for idx, (name, values) in enumerate(ordered):
+            if idx >= len(colors):
+                break
+            if mask is not None and mask.any():
+                plot_t = log_t[mask]
+                plot_v = values[mask]
+            else:
+                plot_t = log_t
+                plot_v = values
+            finite = np.isfinite(plot_v)
+            if not finite.any():
+                continue
+            plot_t = plot_t[finite]
+            plot_v = plot_v[finite]
+            label = name
+            if "rpm" in name.lower():
+                plot_v = plot_v / 60.0
+                label = f"{name} [Hz]"
+                has_rpm = True
+            ax.plot(plot_t, plot_v, lw=0.8, color=colors[idx], label=label)
+            labels.append(label)
+
+        ax.set_xlabel("Time [s]")
+        ax.set_ylabel("PWM / Hz" if has_rpm else "PWM")
+        ax.grid(True, alpha=0.3)
+        if labels:
+            ax.legend(loc="upper right", fontsize=8, framealpha=0.5)
+
+        canvas = FigureCanvasTkAgg(fig, master=win)
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+        toolbar = NavigationToolbar2Tk(canvas, win, pack_toolbar=False)
+        toolbar.update()
+        toolbar.pack(fill="x")
+        canvas.draw_idle()
 
 
 def main():
